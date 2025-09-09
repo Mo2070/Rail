@@ -1,21 +1,22 @@
 # App/main.py
+import io
 import pandas as pd
 import streamlit as st
-from PIL import Image
 from pathlib import Path
+from PIL import Image
 
-# =========================
-# Page config (creative)
-# =========================
+# ──────────────────────────────────────────────────────────────────────────────
+# Page config
+# ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Rail Currency Interface",
-    page_icon="🚆",   # change to your favicon or keep the emoji
-    layout="wide"
+    page_title="Rail Currency",
+    page_icon="🚆",
+    layout="wide",
 )
 
-# =========================
-# Paths (robust for Cloud)
-# =========================
+# ──────────────────────────────────────────────────────────────────────────────
+# Paths / assets (works locally + Streamlit Cloud)
+# ──────────────────────────────────────────────────────────────────────────────
 APP_DIR = Path(__file__).parent
 ROOT_DIR = APP_DIR.parent
 
@@ -29,168 +30,283 @@ def first_existing(paths):
 DATA_PATH = first_existing([APP_DIR / "Rail.xlsx", ROOT_DIR / "Rail.xlsx"])
 LOGO_PATH = first_existing([APP_DIR / "logo.png", ROOT_DIR / "logo.png"])
 
-# =========================
-# Header / Branding
-# =========================
-if LOGO_PATH:
-    try:
-        st.image(Image.open(LOGO_PATH), width=160)
-    except Exception as e:
-        st.warning(f"Logo could not be loaded: {e}")
-
-st.markdown(
-    "<h1 style='text-align:center;margin-top:-10px;color:#0f2942;'>"
-    "Automated Rail Currency Interface</h1>",
-    unsafe_allow_html=True,
-)
-
-# =========================
-# Light styling
-# =========================
-st.markdown(
-    """
-    <style>
-      .main { background-color: #f6f8fb; }
-      h1, h2, h3 { color: #0f2942; }
-      .stSelectbox label { font-weight: 700; color: #0f2942; }
-      .specs-card {
-          background: white;
-          border-radius: 14px;
-          padding: 16px 18px;
-          box-shadow: 0 3px 12px rgba(0,0,0,0.08);
-          margin-top: 10px;
-      }
-      .reset-btn button {
-          background-color: #ff4b4b !important;
-          color: white !important;
-          font-weight: 700;
-          border-radius: 10px;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# =========================
+# ──────────────────────────────────────────────────────────────────────────────
 # Data loading
-# =========================
+# ──────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=True)
 def load_data(path: Path) -> pd.DataFrame:
     if path is None:
-        raise FileNotFoundError("Rail.xlsx not found. Put it in the repo root or in App/.")
+        raise FileNotFoundError("Rail.xlsx not found in repo root or App/.")
 
     df = pd.read_excel(path, engine="openpyxl")
     df.columns = df.columns.str.strip()
 
-    # Validate required columns
     required = {
         "Curr", "IO-Modul", "Denomination", "Emission",
-        "Rail width", "Rail height", "Note width", "Note height"
+        "Rail width", "Rail height", "Note width", "Note height",
     }
-    missing = required.difference(set(df.columns))
+    missing = required.difference(df.columns)
     if missing:
         raise ValueError(f"Missing columns in Rail.xlsx: {sorted(missing)}")
 
-    # Normalize for filtering (strings)
+    # normalize for stable filtering
     df["Curr"] = df["Curr"].astype(str).str.strip()
     df["IO-Modul"] = df["IO-Modul"].astype(str).str.strip()
     df["Emission"] = df["Emission"].astype(str).str.strip()
     df["Denomination_display"] = df["Denomination"].astype(str)
 
-    # Cast numeric display columns to integer (nullable) to avoid "3.0"
-    int_cols = ["Rail width", "Rail height", "Note width", "Note height", "Rail width large"]
-    for col in int_cols:
-        if col in df.columns:
-            df[col] = df[col].astype("Int64")
+    # integer display for KPIs (nullable Int64 to allow blanks)
+    for c in ["Rail width", "Rail height", "Note width", "Note height", "Rail width large"]:
+        if c in df.columns:
+            df[c] = df[c].astype("Int64")
 
     return df
 
+def fmt_int(x):
+    try:
+        return int(x) if pd.notna(x) else "-"
+    except Exception:
+        return x
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Light theme tokens + component CSS
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+      :root{
+        --bg:#F6F8FB; --card:#FFFFFF; --text:#0F2942; --muted:#6B7A90;
+        --primary:#1FA2FF; --accent:#12D8FA; --accent2:#A6FFCB;
+        --shadow:0 8px 24px rgba(15,41,66,.10); --radius:16px;
+      }
+      html, body, .block-container { background: var(--bg) !important; }
+      .topbar {
+        display:flex; align-items:center; justify-content:space-between;
+        background: var(--card); border-radius: 20px; padding: 12px 18px;
+        box-shadow: var(--shadow); margin-bottom: 14px;
+      }
+      .brand { display:flex; align-items:center; gap:12px; }
+      .brand h2 { margin:0; color: var(--text); }
+      .filters-card, .specs-card, .table-card {
+        background: var(--card); border-radius: var(--radius); padding: 18px;
+        box-shadow: var(--shadow);
+      }
+      .chip {
+        display:inline-flex; align-items:center; gap:8px; padding:6px 10px;
+        background: var(--card); border-radius: 999px; border:1px solid rgba(0,0,0,.05);
+        box-shadow: var(--shadow); margin-right:8px; margin-bottom:8px; color: var(--text);
+        font-size: 0.9rem;
+      }
+      /* KPI cards */
+      .kpi {
+        background: var(--card);
+        border-radius: 20px;
+        padding: 18px 20px;
+        text-align:center;
+        box-shadow: var(--shadow);
+        transition: transform .2s ease;
+      }
+      .kpi:hover { transform: translateY(-3px); }
+      .kpi-title { color: var(--muted); font-size:.9rem; letter-spacing:.02em; }
+      .kpi-value { color: var(--text); font-size:2.2rem; font-weight:800; line-height:1; }
+      .subtle { color: var(--muted); }
+
+      .btn-reset button {
+        background:#EF4444; color:#fff; font-weight:700; border-radius:10px;
+      }
+      .center-title { text-align:center; margin: 10px 0 18px; color: var(--text); }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Top bar (logo bigger + Reset on the top-right)
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown('<div class="topbar">', unsafe_allow_html=True)
+left, right = st.columns([0.75, 0.25], vertical_alignment="center")
+with left:
+    st.markdown('<div class="brand">', unsafe_allow_html=True)
+    if LOGO_PATH:
+        # Bigger Diebold Nixdorf icon
+        st.image(Image.open(LOGO_PATH), width=70)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with right:
+    st.markdown('<div class="btn-reset">', unsafe_allow_html=True)
+    if st.button("🔄 Reset", use_container_width=True):
+        # Clear selections & URL params, then rerun
+        st.session_state.clear()
+        st.query_params.clear()
+        st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# Centered title only: "Rail Currency"
+st.markdown("<h1 class='center-title'>Rail Currency</h1>", unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Load data
+# ──────────────────────────────────────────────────────────────────────────────
 try:
     df = load_data(DATA_PATH)
 except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
 
-# =========================
-# Reset button (top-right)
-# =========================
-left, right = st.columns([0.75, 0.25])
-with right:
-    st.markdown('<div class="reset-btn">', unsafe_allow_html=True)
-    if st.button("🔄 Reset"):
-        st.session_state.clear()
-        st.experimental_set_query_params()  # clear any URL params if you add them later
-        st.experimental_rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
+# ──────────────────────────────────────────────────────────────────────────────
+# Filters (card) + chips; using st.query_params (no experimental warnings)
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown('<div class="filters-card">', unsafe_allow_html=True)
+st.subheader("Select Parameters", divider="gray")
 
-# =========================
-# Controls
-# =========================
-st.subheader("Select Parameters")
+# Helpers for defaults from URL
+qp = st.query_params  # Streamlit 1.24+ QueryParams object (no-deprecation)
+def pick_index(options, key):
+    if not options:
+        return 0
+    v = qp.get(key, None)
+    if v in options:
+        return options.index(v)
+    # If query param appears as list (older behavior), handle gracefully
+    if isinstance(v, list) and v and v[0] in options:
+        return options.index(v[0])
+    return 0
 
 # Step 1: Currency
 currency_options = sorted(df["Curr"].dropna().unique().tolist())
-selected_currency = st.selectbox("Step 1: Choose Currency", currency_options)
+sel_currency = st.selectbox(
+    "Step 1: Choose Currency",
+    currency_options,
+    index=pick_index(currency_options, "curr"),
+    key="sel_currency",
+)
 
-df_currency = df[df["Curr"] == selected_currency]
+df_currency = df[df["Curr"] == sel_currency]
 
 # Step 2: IO Module
-io_module_options = sorted(df_currency["IO-Modul"].dropna().unique().tolist())
-selected_io_module = st.selectbox("Step 2: Choose IO Module", io_module_options)
+io_options = sorted(df_currency["IO-Modul"].dropna().unique().tolist())
+sel_io = st.selectbox(
+    "Step 2: Choose IO Module",
+    io_options,
+    index=pick_index(io_options, "io"),
+    key="sel_io",
+)
 
-df_io = df_currency[df_currency["IO-Modul"] == selected_io_module]
+df_io = df_currency[df_currency["IO-Modul"] == sel_io]
 
 # Step 3: Denomination
-denomination_options = sorted(df_io["Denomination_display"].dropna().unique().tolist())
-selected_denomination_display = st.selectbox("Step 3: Choose Denomination", denomination_options)
+denom_options = sorted(df_io["Denomination_display"].dropna().unique().tolist())
+sel_denom = st.selectbox(
+    "Step 3: Choose Denomination",
+    denom_options,
+    index=pick_index(denom_options, "denom"),
+    key="sel_denom",
+)
 
-df_denom = df_io[df_io["Denomination_display"] == selected_denomination_display]
+df_denom = df_io[df_io["Denomination_display"] == sel_denom]
 
 # Step 4: Emission
-emission_options = sorted(df_denom["Emission"].dropna().unique().tolist())
-selected_emission = st.selectbox("Step 4: Choose Emission", emission_options)
+emis_options = sorted(df_denom["Emission"].dropna().unique().tolist())
+sel_emis = st.selectbox(
+    "Step 4: Choose Emission",
+    emis_options,
+    index=pick_index(emis_options, "emis"),
+    key="sel_emis",
+)
 
-df_final = df_denom[df_denom["Emission"] == selected_emission]
+# Update query params (shareable URL) — no deprecation
+st.query_params.update({
+    "curr": sel_currency,
+    "io": sel_io,
+    "denom": sel_denom,
+    "emis": sel_emis,
+})
 
-# =========================
-# Results
-# =========================
-st.subheader("Final Specifications")
+# Active chips
+st.markdown(
+    f"""
+    <div style='margin-top:8px;'>
+      <span class="chip">Currency: <b>{sel_currency}</b></span>
+      <span class="chip">IO: <b>{sel_io}</b></span>
+      <span class="chip">Denom: <b>{sel_denom}</b></span>
+      <span class="chip">Emission: <b>{sel_emis}</b></span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.markdown('</div>', unsafe_allow_html=True)  # end filters card
+
+# Final filtered set
+df_final = df_denom[df_denom["Emission"] == sel_emis]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# KPI cards (results)
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown('<div class="specs-card">', unsafe_allow_html=True)
+st.subheader("Specifications", divider="gray")
+
 if df_final.empty:
-    st.warning("No matching data found for the selected combination.")
+    st.warning("No matching data found. Try another Emission or Denomination.")
 else:
-    specs = df_final.iloc[0]
-
-    # specs card with metrics
-    st.markdown('<div class="specs-card">', unsafe_allow_html=True)
+    row = df_final.iloc[0]
     c1, c2, c3, c4 = st.columns(4)
+    for (title, value, col) in [
+        ("RAIL WIDTH", row["Rail width"], c1),
+        ("RAIL HEIGHT", row["Rail height"], c2),
+        ("NOTE WIDTH", row["Note width"], c3),
+        ("NOTE HEIGHT", row["Note height"], c4),
+    ]:
+        with col:
+            st.markdown("<div class='kpi'>", unsafe_allow_html=True)
+            st.markdown(f"<div class='kpi-title'>{title}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='kpi-value'>{fmt_int(value)}</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    # Use int() to ensure display has no .0 even if dtype changes later
-    def fmt_int(x):
-        try:
-            return int(x) if pd.notna(x) else "-"
-        except Exception:
-            return x
+    if "Rail width large" in df_final.columns and pd.notna(row.get("Rail width large", None)):
+        st.caption(f"Rail width (large): {fmt_int(row['Rail width large'])}")
 
-    c1.metric("Rail Width", f"{fmt_int(specs['Rail width'])}")
-    c2.metric("Rail Height", f"{fmt_int(specs['Rail height'])}")
-    c3.metric("Note Width", f"{fmt_int(specs['Note width'])}")
-    c4.metric("Note Height", f"{fmt_int(specs['Note height'])}")
-    st.markdown("</div>", unsafe_allow_html=True)
+st.markdown('</div>', unsafe_allow_html=True)
 
-    if "Rail width large" in df_final.columns and pd.notna(specs.get("Rail width large", None)):
-        st.caption(f"Rail width (large): {fmt_int(specs['Rail width large'])}")
+# ──────────────────────────────────────────────────────────────────────────────
+# Results table + Excel export
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown('<div class="table-card">', unsafe_allow_html=True)
+st.subheader("Matching Row(s)", divider="gray")
 
-    with st.expander("Show matching row(s)"):
-        cols = [
-            "Curr", "Currency", "IO-Modul", "Denomination", "Emission",
-            "Rail width", "Rail height", "Note width", "Note height"
-        ]
-        available = [c for c in cols if c in df_final.columns]
-        st.dataframe(df_final[available].reset_index(drop=True), use_container_width=True)
+left_t, right_t = st.columns([0.5, 0.5])
+with left_t:
+    st.caption("Tip: Share the current URL to keep these selections.")
+with right_t:
+    if not df_final.empty:
+        buffer = io.BytesIO()
+        df_final.to_excel(buffer, index=False, engine="openpyxl")
+        buffer.seek(0)
+        st.download_button(
+            "⬇️ Download Excel",
+            data=buffer,
+            file_name="rail_specs.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
-with st.expander("How this works"):
-    st.write(
-        "Choose Currency → IO Module → Denomination → Emission. "
-        "The first matching row is summarized above; open the table to see all matches."
+if df_final.empty:
+    st.info("No rows to display for the current selection.")
+else:
+    cols = [
+        "Curr", "Currency", "IO-Modul", "Denomination", "Emission",
+        "Rail width", "Rail height", "Note width", "Note height",
+    ]
+    available = [c for c in cols if c in df_final.columns]
+    st.dataframe(
+        df_final[available].reset_index(drop=True),
+        use_container_width=True,
+        hide_index=True,
     )
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Footer
+# ──────────────────────────────────────────────────────────────────────────────
+st.caption("v1.0 • Rail Currency Interface • © Your Team")
